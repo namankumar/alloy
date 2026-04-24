@@ -24,6 +24,10 @@ ChatGPT Canvas and Claude Projects are close in feel. The gap: their artifacts l
 
 **Alloy is for teams that want to own their AI workflow, not rent it.**
 
+## Why file-first
+
+We chose file-based output over a chat interface because knowledge work output needs to persist. Chat tools give you answers. Alloy gives you files. Every output is a markdown artifact you own and version-control. The constraint forced us toward local-first: if output lives in files, the sync layer becomes the hard problem.
+
 ## Sync tiers
 
 | Tier | How it works | Real-time collab |
