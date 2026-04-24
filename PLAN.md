@@ -1,114 +1,144 @@
-# Plan: Alloy — Markdown-Native Notion Replacement
+# Plan: Alloy — Claude Code for Knowledge Workers
 
 ## Context
-Personal project. A local-first, markdown-native knowledge workspace that replaces Notion for individuals. Core bets: plain .md files on disk (zero lock-in), fast Tauri-based desktop app, and AI powered by the user's own keys (OpenAI, Anthropic, Ollama, etc.) instead of a subscription.
+Personal project. Alloy is an AI harness for knowledge work: the same model as Claude Code (skills, context, agent orchestration, file-based output), with a GUI and a web layer instead of a CLI.
+
+Claude Code is powerful and locked to one machine, one person, no UI, no web access. Alloy solves that. The workspace holds skills (reusable AI workflows), context (what the AI reads before working), and output (what it produces). Alloy makes that system remotely accessible, shareable with colleagues, and operable from a browser — without changing how the underlying AI tools work.
+
+**Core positioning: Alloy is for teams that want to own their AI workflow, not rent it.**
+
+ChatGPT Canvas and Claude Projects are close in feel — persistent docs, AI iteration, some memory. The gap: their artifacts live in vendor databases, their "skills" are custom GPTs someone else controls, and their memory is vendor-managed. Alloy's files are `.md` on disk. Skills are files you write, version, and share. Memory is the workspace. Nothing lives on Alloy's servers unless you choose it.
+
+Cursor is to VS Code what Alloy is to Obsidian. Obsidian is a text editor with AI bolted on as plugins and a read-only static site as its "web layer." Alloy is built around AI as the core interaction model with real multiplayer, real permissions, and a first-class web interface.
+
+**Workspace layers:**
+
+| Layer | What it is | Claude Code equivalent |
+|---|---|---|
+| Skills | Reusable AI workflow definitions | `.claude/skills/` |
+| Context | Files the AI reads before working | `context/`, `CLAUDE.md` |
+| Output | Documents, strategies, notes produced | `docs/`, `cache/` |
 
 Lives at: `/projects/alloy/`
 
 ---
 
-## Product Scope (v1)
+## Product Scope
 
-Replace Notion's core personal workflows:
+### Primitives
 
-| Notion Feature | Slate Approach |
+**Workspace > Projects > Files.** Three-level hierarchy. Workspaces contain projects; projects contain files and folders. Switch between workspaces without closing the app. Each workspace has its own skills, context, and permissions.
+
+**Multiplayer at the foundation.** Yjs CRDTs from day one — not bolted on in v3. Every doc is collaborative by default. Presence, cursors, real-time edits. Permissions per file and per folder: view, comment, edit, admin. Permissions are set by the workspace owner and propagate down unless overridden.
+
+**Memory = the workspace.** No separate memory layer. The files in `context/` are what the AI reads. What the user writes is what the AI knows. Local by default; shared when permissions allow.
+
+### Skills
+
+Skills are the core unit of AI work. A skill is a markdown file: plain instructions, variables, and tool calls. Creating one is the same act as writing a doc.
+
+- **Create:** write a `.md` file in `_skills/`, describe what it does, define inputs with `{{variables}}`
+- **Save:** it's a file — committed to the workspace like any other doc
+- **Execute:** select text, invoke a skill from the command palette or `/` slash menu, or run it on a schedule. Output streams inline or to a new doc.
+- **Share:** skills are files — share them with a colleague the same way you share any doc. Permissions apply.
+- **Out-of-box skills:** voice transcription, formatting cleanup, summarize, expand, rewrite, extract action items, weekly brief. Shipped in `_skills/defaults/`, editable and forkable.
+
+### Editor
+
+- Rich block editing via TipTap (ProseMirror-based)
+- **Inline selections:** select any text, invoke a skill or AI command on the selection. Output replaces, appends, or opens in sidebar.
+- Slash command palette: `/skill`, `/AI`, `/insert`, `/file`
+- Code, math (KaTeX), Mermaid diagrams, wikilinks `[[]]`
+- **Drag and drop:** images, files, URLs. Images stored in `_assets/` alongside the doc. Files linked by relative path.
+- YAML frontmatter for metadata, tags, schema
+
+### File Operations
+
+CLI-like tools available from the command palette and keyboard shortcuts:
+
+| Operation | Description |
 |---|---|
-| Pages + hierarchy | Nested .md files in folders — filesystem IS the workspace |
-| Rich block editing | TipTap with custom nodes |
-| Slash commands | `/` command palette |
-| Code / math / mermaid | Syntax-highlighted fenced blocks via CodeMirror + KaTeX + Mermaid.js |
-| Images + embeds | Local file embeds via TipTap image node |
-| Templates | .md template files in `_templates/` folder |
-| Full-text search | SQLite FTS5 index built from file watcher |
-| Tags + backlinks | YAML frontmatter tags + `[[wikilinks]]` with SQLite backlink table |
-| **Databases** | Defer to v2 (YAML frontmatter + `_schema.yaml` convention) |
+| `find` | Search files by name, path, or frontmatter |
+| `grep` | Full-text search across workspace (FTS5) |
+| `mv` | Move/rename files and folders, updates all backlinks |
+| `cp` | Duplicate a file or folder |
+| `mkdir` | Create folder structure |
 
-**Cut from v1:** database views, sync, graph view, real-time collab, web clipper.
+All file ops are undoable. Backlinks and wikilinks update automatically on `mv`.
+
+### Tools & Integrations
+
+Built-in tools available to skills and the AI router:
+
+- **Web:** browse URLs, search the web, fetch page content
+- **Google Drive:** read and write docs, sheets, slides
+- **Analytics:** query Mixpanel, Amplitude, GA — surface data inline
+- **Calendar:** read events, create holds
+- **Linear / Monday:** read issues, update status, create tasks
+- **Custom:** any OpenAI-compatible tool spec can be registered in workspace settings
+
+Tools are declared in skill files and approved per-workspace. No tool runs without user-level permission.
+
+### BYOAI
+
+Rust AI router in the Tauri backend. Frontend never knows which model is active. Keys in OS keychain.
+
+```
+Frontend (React)
+  → Tauri invoke("ai_stream", { prompt, context, tools })
+    → AI Router (Rust)
+      → OpenAI / Anthropic / Ollama / Custom adapter
+      → Tool calls dispatched and results returned
+      → Stream tokens back via Tauri events
+```
+
+Providers: OpenAI, Anthropic, Ollama, any OpenAI-compatible endpoint. Zero-friction default: local Ollama model, no key needed. BYOAI unlocks better models.
+
+**Cut from v1:** database views, graph view, web clipper, mobile app.
+
+---
+
+## Local + Web Architecture
+
+**The sync problem:** local app and web need to share state. Files are the source of truth. Three tiers:
+
+| Tier | How it works | Who it's for |
+|---|---|---|
+| **Git sync** | Local app commits to a repo. Web reads from the same repo. No real-time collab, async only. | Solo users, async teams |
+| **Self-hosted server** | User runs an Alloy server (Docker). Local and web connect to it. Files on their infra. Yjs runs through the server — real-time collab works. | Teams that want full ownership |
+| **Alloy Cloud** | Alloy hosts the sync server. Opt-in. Files replicated to Alloy's servers. Managed, no ops required. | Teams that want convenience |
+
+Default: self-hosted. Cloud is opt-in. Files never touch Alloy's servers unless you choose it.
+
+**Local app** is the full-power version: all file ops, CLI tools, Claude Code integration, offline mode, OS keychain for keys. **Web** is the collaboration and access layer: editing, skill execution (via the server's AI router), sharing. Same files, same Yjs state — different surface.
+
+```
+Local App (Tauri)          Alloy Server (self-hosted or cloud)       Web App (browser)
+─────────────────          ───────────────────────────────────       ─────────────────
+File system (source) ───►  Yjs sync + AI router + permissions  ◄─── React frontend
+AI router (local)          Files on server or S3                     No local file access
+File ops (grep/mv/find)    WebSocket for real-time                   Full editor + skills
+Offline capable            REST for async                            Requires connection
+```
+
+**Pricing model:**
+- **Open source:** self-hosted, unlimited, free. No keys sent to Alloy.
+- **Alloy Cloud:** managed sync + web access. Per-seat pricing. Files on Alloy's infra (opt-in).
+- **Alloy Cloud Enterprise:** SSO, audit logs, data residency, SLA.
 
 ---
 
 ## Tech Stack
 
-- **Runtime:** Tauri (Rust backend, system WebView frontend — fast startup, small bundle)
+- **Runtime:** Tauri (Rust backend, system WebView frontend)
 - **Frontend:** React + TypeScript
 - **Editor:** TipTap (ProseMirror-based, block editing, extensible)
-- **Storage:** Plain .md files (source of truth) + SQLite index (cache only — deletable and rebuildable)
-- **Sync (v1):** None — user uses iCloud/Dropbox/git on their own
+- **Multiplayer:** Yjs CRDTs (from v1)
+- **Storage:** Plain `.md` files (source of truth) + SQLite index (cache, deletable/rebuildable)
+- **Sync:** Git (v1 async), self-hosted Alloy server (v2 real-time), Alloy Cloud (v2 managed)
 - **Build:** pnpm monorepo
 
 ---
-
-## BYOAI Architecture
-
-Rust AI router in the Tauri backend. Frontend never knows which provider is active. Keys stored in OS keychain (never on disk unencrypted).
-
-```
-Frontend (React)
-  → Tauri invoke("ai_stream", { prompt, context })
-    → AI Router (Rust)
-      → OpenAI adapter / Anthropic adapter / Ollama adapter / Custom OpenAI-compat
-      → Stream tokens back via Tauri events
-```
-
-**Provider config:** JSON in OS keychain. Supports multiple providers, one active default.
-
-**AI features (v1):**
-- Inline ghost text completions (Tab to accept, 800ms debounce)
-- `/AI` slash commands: summarize, expand, rewrite, bullet list
-- Chat sidebar with current doc as context
-- **Prompt Library** (personal + team-shared — see section below)
-
-**Zero-friction default:** Ship with Ollama-compatible local model pre-configured — works offline, no key needed. BYOAI unlocks better models.
-
----
-
-## Prompt Library
-
-A shared team prompt database built into the AI layer.
-
-**Saving a prompt:**
-- Any AI interaction (slash command, chat, inline completion) has a one-click "Save prompt" action
-- On save: give it a title, optional tags, choose to include output or prompt-only, mark as personal or team-shared
-
-**Storage:**
-- Personal prompts: `~/.alloy/prompts.json` (local, never synced)
-- Team prompts: `_prompts/` folder inside the workspace — plain `.json` files, synced with the rest of the workspace via git/iCloud/Dropbox like any other file
-
-**Using prompts:**
-- From the `/AI` slash command palette: browse and search saved prompts instead of writing from scratch
-- Prompts are parameterized — `{{selected_text}}`, `{{doc_title}}`, `{{date}}` get substituted at run time
-- Anyone can fork a team prompt, edit it, and re-share the improved version
-
-**Prompt evolution model:**
-Prompts improve through contributions over time, not just individual saves.
-
-- **Versioning:** Every edit to a team prompt creates a new version (stored as a version history array in the JSON). You can see who changed what and roll back.
-- **Upvotes / usefulness signal:** After running a prompt, a lightweight "Was this useful?" thumbs up/down is shown. The score is stored on the prompt and surfaces in search ranking — better prompts float to the top.
-- **Suggested edits:** Anyone can propose an edit to a team prompt without overwriting it. The edit sits as a `suggested_edit` on the prompt until the original author (or a designated prompt maintainer) approves it and merges it as a new version.
-- **Usage count:** Tracked locally. Prompts used more frequently rank higher in the palette.
-- **Community library (v2+):** An optional public prompt registry — teams can publish prompts to a shared Slate community index, browse prompts from other teams/users, and import them into their own workspace. All still BYOAI — the prompts are just text, no data leaves without explicit action.
-
-**Team prompt schema (`_prompts/<slug>.json`):**
-```json
-{
-  "id": "summarize-meeting-notes",
-  "title": "Summarize meeting notes",
-  "prompt": "Summarize the following meeting notes into: key decisions, action items, and open questions.\n\n{{selected_text}}",
-  "include_output": false,
-  "tags": ["meetings", "summarization"],
-  "author": "naman",
-  "created": "2026-03-07",
-  "upvotes": 12,
-  "usage_count": 47,
-  "versions": [
-    { "version": 1, "prompt": "...", "author": "naman", "date": "2026-03-07" },
-    { "version": 2, "prompt": "...", "author": "alaa", "date": "2026-03-14" }
-  ],
-  "suggested_edits": []
-}
-```
-
-**Why this matters:** Teams accumulate institutional AI knowledge — the prompts that actually work for their domain. Right now that lives scattered across Slack and Notion docs, undiscoverable and never improved. Slate makes it a first-class, versioned, community-improvable artifact. No equivalent anywhere.
 
 ---
 
@@ -230,14 +260,14 @@ Standard CommonMark + YAML frontmatter. Non-standard but universally supported e
 
 ## Build Sequence
 
-**v1 (months 1-4): The Editor**
-Tauri app (macOS first), full TipTap editing, file tree, backlinks, FTS search, BYOAI (inline + slash + chat), Prompt Library (personal + team-shared via `_prompts/` folder), Notion import wizard, templates. Success: user can migrate personal Notion and not go back.
+**v1 (months 1-4): The Harness**
+Tauri app (macOS first). Multiplayer foundation (Yjs). Full editor (TipTap, drag-and-drop, inline selections). Skills system (`_skills/` folder, run from command palette). Context management UI. File ops (find, grep, mv). BYOAI router. Out-of-box skills. Permissions per doc. Success: user runs their full knowledge workflow — skills, context, output — entirely in Alloy.
 
-**v2 (months 5-8): Databases + Sync**
-Database views (table, kanban), `_schema.yaml` convention, git-based sync, semantic search/RAG, graph view, Windows/Linux parity.
+**v2 (months 5-8): Web + Integrations**
+Web interface: workspace accessible from any browser, no install required. Tool integrations (web browse, Google Drive, analytics, Linear, Calendar). Database views (table, kanban). Git-based sync. Success: a colleague opens a shared workspace in a browser and runs a skill without installing anything.
 
-**v3 (months 9-14): Collaboration**
-Yjs CRDTs, comments, publish to web (static site export), plugin API, mobile companion.
+**v3 (months 9-14): Platform**
+Plugin API for custom tools and skills. Mobile companion (read + light edit). Community skill library. Public workspace publishing.
 
 ---
 
